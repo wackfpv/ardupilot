@@ -26,6 +26,7 @@
 #include "AP_Scheduler.h"
 
 #include <AP_HAL/AP_HAL.h>
+#include <AP_BoardConfig/AP_BoardConfig.h>
 #include <AP_Param/AP_Param.h>
 #include <AP_Vehicle/AP_Vehicle.h>
 #include <AP_Logger/AP_Logger.h>
@@ -133,6 +134,13 @@ void AP_Scheduler::init(const AP_Scheduler::Task *tasks, uint8_t num_tasks, uint
     _num_tasks = _num_vehicle_tasks + _num_common_tasks;
 
    _last_run = NEW_NOTHROW uint16_t[_num_tasks];
+    if (_last_run == nullptr) {
+        // ArduPilot builds without C++ exceptions, so a failed NEW_NOTHROW
+        // returns nullptr. _last_run[i] is dereferenced every tick in run(),
+        // so a null here would be a guaranteed hard fault with no breadcrumb.
+        // Fail loudly and diagnosably at init instead.
+        AP_BoardConfig::allocation_error("scheduler: %u tasks", (unsigned)_num_tasks);
+    }
     _tick_counter = 0;
 
     // setup initial performance counters
