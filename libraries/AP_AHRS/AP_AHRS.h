@@ -688,7 +688,7 @@ public:
 
     // return primary accels
     const Vector3f &get_accel(void) const {
-        return AP::ins().get_accel(_get_primary_accel_index());
+        return AP::ins().get_accel(get_primary_accel_index());
     }
 
     // return primary accel bias. This should be subtracted from
@@ -924,13 +924,6 @@ private:
     // poke AP_Notify based on values from status
     void update_notify_from_filter_status(const nav_filter_status &status);
 
-    /*
-     * copy results from a backend over AP_AHRS canonical results.
-     * This updates member variables like roll and pitch, as well as
-     * updating derived values like sin_roll and sin_pitch.
-     */
-    void copy_estimates_from_backend_estimates(const AP_AHRS_Backend::Estimates &results);
-
     // write out secondary estimates:
     void Write_AHRS2(void) const;
     // write POS (canonical vehicle position) message out:
@@ -982,15 +975,6 @@ private:
     // return the index of the primary core or -1 if no primary core selected
     int8_t _get_primary_core_index() const;
 
-    // get the index of the current primary accelerometer sensor
-    uint8_t _get_primary_accel_index(void) const;
-
-    // get the index of the current primary gyro sensor
-    uint8_t _get_primary_gyro_index(void) const;
-
-    // get the index of the current primary IMU
-    uint8_t _get_primary_IMU_index(void) const;
-
     // get current location estimate
     bool _get_location(Location &loc) const;
 
@@ -1015,7 +999,6 @@ private:
      */
     struct {
         EKFType active_EKF_type;
-        uint8_t primary_IMU;
         uint8_t primary_gyro;
         uint8_t primary_accel;
         uint8_t primary_core;

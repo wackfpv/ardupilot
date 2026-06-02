@@ -60,6 +60,9 @@ public:
         friend class AP_AHRS_NavEKF2;
         friend class AP_AHRS_NavEKF3;
 
+        // inertial sensor information
+        uint8_t primary_gyro;
+
         // if attitude_valid is true then all of the
         // eulers/quaternion/matrix must be valid:
         bool attitude_valid;
@@ -80,6 +83,9 @@ public:
 
         Vector3f gyro_estimate;
         Vector3f gyro_drift;
+
+        uint8_t primary_accel;
+
         Vector3f accel_ef;
         Vector3f accel_bias;
 
@@ -142,15 +148,6 @@ public:
 
     // init sets up INS board orientation
     virtual void init();
-
-    // get the index of the current primary gyro sensor
-    virtual uint8_t get_primary_gyro_index(void) const {
-#if AP_INERTIALSENSOR_ENABLED
-        return AP::ins().get_first_usable_gyro();
-#else
-        return 0;
-#endif
-    }
 
     // Methods
     virtual void update() = 0;
