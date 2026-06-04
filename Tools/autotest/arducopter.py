@@ -35,6 +35,7 @@ from vehicle_test_suite import PreconditionFailedException
 from vehicle_test_suite import Test
 from vehicle_test_suite import WaitAndMaintainArmed
 from vehicle_test_suite import WaitAndMaintainAttitude
+from vehicle_test_suite import WaitAndMaintainLocation
 from vehicle_test_suite import WaitModeTimeout
 
 # get location of scripts
@@ -6502,6 +6503,7 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         dest_ned = rotmat.Vector3(x, y, -z)
         tstart = self.get_sim_time()
         success_start = -1
+        self.context_set_message_rate_hz('LOCAL_POSITION_NED', 10)
         while True:
             now = self.get_sim_time_cached()
             if now - tstart > timeout:
@@ -6869,6 +6871,59 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.run_cmd_do_set_mode("ACRO")
         self.wait_disarmed()
 
+    def MAV_CMD_DO_SET_ROI_WPNEXT_OFFSET(self):
+        '''check the MAV_CMD_DO_SET_ROI_WPNEXT_OFFSET mission item'''
+        # setup mount parameters
+        self.setup_servo_mount()
+        self.reboot_sitl() # to handle MNT_TYPE changing
+
+        alt = 50
+
+        loc = self.mav.location()
+
+        items = [
+            self.mission_item_home(),
+            self.mission_item_copter_takeoff(alt=alt),
+        ]
+
+        loc = self.offset_location_ne(loc, 100, 0)
+        items.append(self.mission_item_do_cmd_roi_set_wpnext_offset(p=0))
+        items.append(self.mission_item_waypoint(loc.lat, loc.lng, alt))
+
+        loc = self.offset_location_ne(loc, 100, 0)
+        items.append(self.mission_item_do_cmd_roi_set_wpnext_offset(p=-45))
+        items.append(self.mission_item_waypoint(loc.lat, loc.lng, alt))
+
+        loc = self.offset_location_ne(loc, 100, 0)
+        items.append(self.mission_item_do_cmd_roi_set_wpnext_offset(y=45))
+        items.append(self.mission_item_waypoint(loc.lat, loc.lng, alt))
+
+        # now RTL
+        items.append(self.mission_item_rtl())
+
+        self.renumber_mission_items(items)
+        self.check_mission_upload_download(items)
+
+        self.set_parameter('AUTO_OPTIONS', 3)
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
+        self.change_mode('AUTO')
+
+        self.wait_current_waypoint(3)
+        # the 30 here is because the vehicle is pitching down and the
+        # gimbal is compensating
+        self.wait_mount_roll_pitch_yaw_deg(r=0, p=30, y=0)
+
+        self.wait_current_waypoint(5)
+        # the -15 here is because the vehicle is pitching down and the
+        # gimbal is compensating, and is being asked to pitch down 45 degrees
+        self.wait_mount_roll_pitch_yaw_deg(r=0, p=-15, y=0)
+
+        self.wait_current_waypoint(7)
+        self.wait_mount_roll_pitch_yaw_deg(y=45)
+
+        self.wait_disarmed()
+
     def constrained_mount_pitch(self, pitch_angle_deg, mount_instance=1):
         PITCH_MIN = self.get_parameter("MNT%u_PITCH_MIN" % mount_instance, verbose=False)
         PITCH_MAX = self.get_parameter("MNT%u_PITCH_MAX" % mount_instance, verbose=False)
@@ -6929,13 +6984,36 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             quiet=True,
         )
 
+    # FIXME: change this to use wait_and_maintain
+    def wait_mount_roll_pitch_yaw_deg(self, r=None, p=None, y=None, timeout=20):
+        tstart = self.get_sim_time()
+        while True:
+            if self.get_sim_time_cached() - tstart > timeout:
+                raise NotAchievedException("Did not get rpy")
+            got_r, got_p, got_y, got_y_is_abs = self.get_mount_roll_pitch_yaw_deg()
+            self.progress(f"want=({r}, {p}, {y})")
+            self.progress(f"got=({got_r}, {got_p}, {got_y}, {got_y_is_abs})")
+            passed = True
+            for (want, got) in [(r, got_r), (p, got_p), (y, got_y)]:
+                if want is None:
+                    continue
+                if abs(want - got) > 5:
+                    passed = False
+                    break
+            if passed:
+                self.progress("achieved mount rpy")
+                break
+
     def get_mount_roll_pitch_yaw_deg(self):
-        '''return mount (aka gimbal) roll, pitch and yaw angles in degrees'''
+        '''return mount (aka gimbal) roll, pitch and yaw angles in degrees - in body frame'''
         # wait for gimbal attitude message
         m = self.assert_receive_message('GIMBAL_DEVICE_ATTITUDE_STATUS', timeout=5)
+        return self.eulers_in_degrees_from_GIMBAL_DEVICE_ATTITUDE_STATUS(m)
+
+    def eulers_in_degrees_from_GIMBAL_DEVICE_ATTITUDE_STATUS(self, m):
+        # convert quaternion to euler angles and return
 
         yaw_is_absolute = m.flags & mavutil.mavlink.GIMBAL_DEVICE_FLAGS_YAW_LOCK
-        # convert quaternion to euler angles and return
         q = quaternion.Quaternion(m.q)
         euler = q.euler
         return math.degrees(euler[0]), math.degrees(euler[1]), math.degrees(euler[2]), yaw_is_absolute
@@ -13861,6 +13939,46 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.context_pop()
         self.reboot_sitl()
 
+    def CorrectedDeltaVelocity(self):
+        '''test that AHRS applies accel bias correctly'''
+        self.change_mode('LOITER')
+        self.wait_ready_to_arm()
+        here = self.mav.location(relative_alt=True)
+        hereabs = self.mav.location()
+        self.set_parameters({
+            "AHRS_EKF_TYPE": 10,
+
+            "SIM_ACC1_BIAS_X": 1,
+            "SIM_ACC2_BIAS_X": 1,
+            "SIM_ACC3_BIAS_X": 1,
+
+            "PLND_ENABLED": 1,
+            "SIM_PLD_LAT": here.lat,
+            "SIM_PLD_LON": here.lng,
+            "SIM_PLD_HEIGHT": 0,
+            "SIM_PLD_ALT_LMT": 15,
+            "SIM_PLD_DIST_LMT": 10,
+            "PLND_TYPE": 1,  # companion
+        })
+        self.set_analog_rangefinder_parameters()
+        self.set_parameter("SIM_SONAR_SCALE", 12)
+        self.reboot_sitl()
+
+        self.takeoff(10, mode='LOITER')
+
+        self.run_auxfunc(39, 2)  # enable precision loiter
+        WaitAndMaintainLocation(
+            self,
+            hereabs,
+            fn=lambda : self.precision_loiter_to_pos(0, 0, 10, True),
+            fn_interval=0.1,
+            minimum_duration=10,
+        ).run()
+        self.run_auxfunc(39, 0)  # disable precision loiter
+
+        self.change_mode('LAND')
+        self.wait_disarmed()
+
     def IMUConsistency(self):
         '''test IMUs must be consistent with one another'''
         self.wait_ready_to_arm()
@@ -14033,6 +14151,7 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
              self.CustomController,
              self.WPArcs,
              self.WPArcs2,
+             self.CorrectedDeltaVelocity,
         ])
         return ret
 
@@ -14122,6 +14241,7 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
              self.MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE,
              self.AutoYawDO_MOUNT_CONTROL,
              self.MountPOIFromAuxFunction,
+             self.MAV_CMD_DO_SET_ROI_WPNEXT_OFFSET,
              self.Button,
              self.ShipTakeoff,
              self.RangeFinder,
@@ -15069,14 +15189,9 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.set_home(pos)
         self.poll_home_position()
         self.wait_statustext("Polygon fence breached", check_context=True)
-        self.context_pop()
         self.wait_mode('RTL')
         self.wait_rtl_complete(check_alt=False)
-
-        # we have set home to a strange place, meaning at the very
-        # least home-relative altitudes are not going to be as
-        # expected.  Reboot so we get a fresh setup for the next test
-        self.reboot_sitl()
+        self.context_pop()
 
     def HomeCircleInclusionFence_MultipleHomeCircle(self, target_system=1, target_component=1):
         '''upload multiple circles; should breach passing the innermost'''
@@ -15179,11 +15294,6 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.wait_groundspeed(0, 0.5, timeout=15)
         self.set_rc(2, 1500)
         self.do_RTL()
-
-        # we have set home to a strange place, meaning at the very
-        # least home-relative altitudes are not going to be as
-        # expected.  Reboot so we get a fresh setup for the next test
-        self.reboot_sitl()
 
     def MAV_CMD_SET_EKF_SOURCE_SET(self):
         '''test setting of source sets using mavlink command'''
@@ -15521,7 +15631,6 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.change_mode('LOITER')
         self.wait_altitude(here.alt-1, here.alt+1, minimum_duration=10)
         self.disarm_vehicle(force=True)
-        self.reboot_sitl()  # to "unstick" home
 
     def GuidedModeThrust(self):
         '''test handling of option-bit-3, where mavlink commands are
@@ -15852,8 +15961,6 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.run_cmd(mavutil.mavlink.MAV_CMD_DO_SET_SERVO, p1=11, p2=2000)
         self.wait_statustext("SITL: Clamp: grabbed vehicle", check_context=True)
         self.context_pop()
-
-        self.reboot_sitl()  # because we set home
 
     def GripperReleaseOnThrustLoss(self):
         '''tests that gripper is released on thrust loss if option set'''
@@ -16663,6 +16770,66 @@ RTL_ALT_M 111
         self.do_set_mode_via_command_int('RTL')
         self.wait_disarmed()
 
+    def RCOverridesClearByPilotInput(self):
+        '''Test RC_OPTIONS bit 14 on Copter: roll/pitch/yaw/throttle each clear overrides'''
+        self.set_parameters({
+            "MAV_GCS_SYSID": self.mav.source_system,
+            "RC12_OPTION": 46,  # RC_OVERRIDE_ENABLE aux switch
+        })
+        self.reboot_sitl()
+
+        self.set_rc(12, 2000)
+        self.delay_sim_time(0.2)
+
+        bit_clear_by_rc = 1 << 14
+
+        self.start_subtest("RC_OPTIONS bit off: pilot input does not clear overrides")
+        rc_options = int(self.get_parameter("RC_OPTIONS"))
+        self.set_parameter("RC_OPTIONS", rc_options & ~bit_clear_by_rc)
+        self._check_rc_overrides_cleared_by_pilot_input(
+            trigger_ch=1, trigger_pwm=1700,
+            override_ch=3, override_pwm=1300,
+            expect_clear=False,
+        )
+
+        rc_options = int(self.get_parameter("RC_OPTIONS"))
+        self.set_parameter("RC_OPTIONS", rc_options | bit_clear_by_rc)
+
+        self.start_subtest("Override held while every stick stays at trim")
+        self._check_rc_overrides_cleared_by_pilot_input(
+            trigger_ch=None, trigger_pwm=None,
+            override_ch=3, override_pwm=1300,
+            expect_clear=False,
+        )
+
+        self.start_subtest("Roll input clears overrides")
+        self._check_rc_overrides_cleared_by_pilot_input(
+            trigger_ch=1, trigger_pwm=1700,
+            override_ch=3, override_pwm=1300,
+            expect_clear=True,
+        )
+
+        self.start_subtest("Pitch input clears overrides")
+        self._check_rc_overrides_cleared_by_pilot_input(
+            trigger_ch=2, trigger_pwm=1700,
+            override_ch=1, override_pwm=1700,
+            expect_clear=True,
+        )
+
+        self.start_subtest("Throttle input clears overrides")
+        self._check_rc_overrides_cleared_by_pilot_input(
+            trigger_ch=3, trigger_pwm=1700,
+            override_ch=1, override_pwm=1700,
+            expect_clear=True,
+        )
+
+        self.start_subtest("Yaw input clears overrides")
+        self._check_rc_overrides_cleared_by_pilot_input(
+            trigger_ch=4, trigger_pwm=1700,
+            override_ch=1, override_pwm=1700,
+            expect_clear=True,
+        )
+
     def MISSION_OPTION_CLEAR_MISSION_AT_BOOT(self):
         '''check functionality of mission-clear-at-boot option'''
         self.upload_simple_relhome_mission([
@@ -17391,6 +17558,7 @@ return update, 1000
             self.EK3_RNG_USE_HGT,
             self.NoRC,
             self.RCOverridesNoRCReceiver,
+            self.RCOverridesClearByPilotInput,
             self.TerrainDBPreArm,
             self.ThrottleGainBoost,
             self.ScriptMountPOI,

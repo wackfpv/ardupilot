@@ -251,9 +251,13 @@ public:
     }
 
     // Retrieves the corrected NED delta velocity in use by the inertial navigation
-    void getCorrectedDeltaVelocityNED(Vector3f& ret, float& dt) const {
+    bool getCorrectedDeltaVelocityNED(Vector3f& ret, float& dt) const {
+        if (!state.corrected_dv_valid) {
+            return false;
+        }
         ret = state.corrected_dv;
         dt = state.corrected_dv_dt;
+        return true;
     }
 
     // set the EKF's origin location in 10e7 degrees.  This should only
@@ -481,14 +485,10 @@ public:
     // check if external nav is providing yaw
     bool using_extnav_for_yaw(void) const;
 
-    // check if GPS is being used to estimate position or velocity
-    // always returns true for External and SIM EKF types
-    bool using_gps(void) const;
-
-    // check if GPS is configured as the horizontal position source
-    // for the configured EKF type. Used to decide whether GPS will
-    // set the EKF origin (which is immutable once set).
-    bool using_gps_for_pos(void) const;
+    // active_backend_configured_to_use_gps will be true if the
+    // estimator will use GPS data in creating its estimate when the
+    // data is good
+    bool active_backend_configured_to_use_gps() const { return active_estimates->configured_to_use_gps; }
 
     // set and save the ALT_M_NSE parameter value
     void set_alt_measurement_noise(float noise);
@@ -957,7 +957,7 @@ private:
     bool _get_secondary_position(Location &loc) const;
 
     // Retrieves the corrected NED delta velocity in use by the inertial navigation
-    void _getCorrectedDeltaVelocityNED(Vector3f& ret, float& dt) const;
+    bool _getCorrectedDeltaVelocityNED(Vector3f& ret, float& dt) const WARN_IF_UNUSED;
 
     // returns the inertial navigation origin in lat/lon/alt
     bool _get_origin(Location &ret) const WARN_IF_UNUSED;
@@ -1029,6 +1029,7 @@ private:
         bool secondary_pos_ok;
         Vector2f ground_speed_vec;
         float ground_speed;
+        bool corrected_dv_valid;
         Vector3f corrected_dv;
         float corrected_dv_dt;
         Location origin;
