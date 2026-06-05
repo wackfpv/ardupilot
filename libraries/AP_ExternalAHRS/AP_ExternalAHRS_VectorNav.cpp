@@ -191,7 +191,7 @@ AP_ExternalAHRS_VectorNav::AP_ExternalAHRS_VectorNav(AP_ExternalAHRS *_frontend,
     latest_ins_ekf_packet = NEW_NOTHROW VN_INS_ekf_packet;
     latest_ins_gnss_packet = NEW_NOTHROW VN_INS_gnss_packet;
 
-    if (!pktbuf || !latest_ins_ekf_packet) {
+    if (!pktbuf || !latest_ins_ekf_packet || !latest_ins_gnss_packet) {
         AP_BoardConfig::allocation_error("VectorNav ExternalAHRS");
     }
 
